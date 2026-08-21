@@ -1,0 +1,14 @@
+*.o
+*.elf
+*.bin
+lua/md.lua
+roms/
+rom-backup/
+*.srm
+*.bin
+*.md5
+*.smd
+*.gen
+*.log
+*.ppm
+__pycache__/

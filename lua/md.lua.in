@@ -10,7 +10,14 @@ init_dlsym()
 sceMsgDialogTerminate()
 
 -- Where the UDP debug log is sent. Listen with:  nc -u -l -p 9027
-local PC_IP    = "192.168.1.2"
+--
+-- "auto" derives the destination from the console's own address and sends to
+-- the subnet broadcast, so it works on any network with nothing to configure.
+-- A hardcoded address here would be wrong for everybody except whoever built
+-- it, and it fails by producing no log at all rather than an error.
+--
+-- Set an explicit "a.b.c.d" instead if you would rather log to one machine.
+local PC_IP    = "auto"
 local LOG_PORT = 9027
 local WEB_PORT = 9030
 
@@ -31,7 +38,31 @@ local function make_sockaddr_in(port, ip)
     return sa
 end
 
+-- Resolve "auto" to this console's subnet broadcast address. get_current_ip()
+-- is a Luac0re builtin, so the console can work this out for itself.
+if PC_IP == "auto" then
+    local own = tostring(get_current_ip() or "")
+    local a, b, c = own:match("(%d+)%.(%d+)%.(%d+)%.%d+")
+    if a then
+        PC_IP = a .. "." .. b .. "." .. c .. ".255"
+    else
+        -- Could not read our own address; fall back to the all-subnets
+        -- broadcast, which still reaches a listener on the same segment.
+        PC_IP = "255.255.255.255"
+    end
+end
+
 local log_sock = create_socket(AF_INET, SOCK_DGRAM, 0)
+
+-- Sending to a broadcast address is refused with EACCES unless SO_BROADCAST is
+-- set. BSD values: SOL_SOCKET 0xffff, SO_BROADCAST 0x0020 -- the PS5 kernel is
+-- FreeBSD-derived, and the Linux numbers differ.
+if log_sock >= 0 then
+    local bcast_en = malloc(4)
+    write32(bcast_en, 1)
+    syscall.setsockopt(log_sock, 0xffff, 0x0020, bcast_en, 4)
+end
+
 local log_sa   = make_sockaddr_in(LOG_PORT, PC_IP)
 
 local function ulog(m)

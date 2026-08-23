@@ -8,53 +8,40 @@
 
 -- Resolve sceKernelDlsym before Luac0re's own guess is used.
 --
--- init_dlsym() computes it as a fixed distance from
--- sceKernelGetModuleInfoFromAddr and, on PS5, never checks the answer. The
--- distance measured from firmware is 0x330 on 1.05, 0x340 on 4.00 and 4.51,
--- and 0x450 on 10.00 and 13.20 -- but the built-in uses 0x480 for anything
--- below 10.00, which is wrong for all of them. Calling that address kills the
--- Lua VM outright, so the loader prints its banner and vanishes.
+-- init_dlsym() derives it as a fixed distance from
+-- sceKernelGetModuleInfoFromAddr and, on PS5, never checks the answer. It uses
+-- 0x450 for firmware 10.00 and up, which is correct, and 0x480 below that,
+-- which is not correct for any firmware -- the real distance is 0x340 on 4.xx.
+-- Calling the wrong address kills the Lua VM outright, so the loader prints
+-- its banner and disappears.
 --
--- Verify instead of guessing: sceKernelDlsym starts with the same prologue on
--- every firmware checked, so test each candidate before trusting it. Reading
--- memory is harmless; calling the wrong address is not.
--- Wrapped: if these primitives are not ready this early, fall through to
--- the built-in path rather than taking the loader down -- which is the very
--- failure being fixed.
+-- The address cannot be checked by reading it: PS5 system-module text is
+-- execute-only, so reading libkernel faults even where calling it is fine.
+-- That is why Luac0re's PS4 path verifies a prologue and its PS5 path does
+-- not. Ask the kernel instead -- sys_dynlib_dlsym needs no offset, reads
+-- nothing, and is correct on every firmware.
+--
+-- Wrapped: on anything unexpected, fall through to the built-in path rather
+-- than taking the loader down, which is the failure being fixed.
 pcall(function()
-if type(sceKernelDlsym) ~= "function" then
-    local gmifa = read64(LIBC_OFFSETS.sceKernelGetModuleInfoFromAddr)
+    if type(sceKernelDlsym) == "function" then return end
 
-    -- 55 48 89 E5 | E8 rel32 | 85 C0 | 74 1D | E8 rel32 | 8B 00
-    local function is_dlsym(addr)
-        local ok, b = pcall(function() return read_buffer(addr, 20) end)
-        if not ok or not b or #b < 20 then return false end
-        local function at(i) return string.byte(b, i) end
-        return at(1) == 0x55 and at(2) == 0x48 and at(3) == 0x89 and at(4) == 0xE5
-           and at(5) == 0xE8
-           and at(10) == 0x85 and at(11) == 0xC0
-           and at(12) == 0x74 and at(14) == 0xE8
-           and at(19) == 0x8B and at(20) == 0x00
+    local out = malloc(8)
+    write64(out, 0)
+    if syscall.dlsym(LIBKERNEL_HANDLE, "sceKernelDlsym", out) ~= 0 then
+        DLSYM_FIX_MSG = "sys_dynlib_dlsym refused; using the built-in guess"
+        return
     end
 
-    local found = nil
-    for _, delta in ipairs({ 0x340, 0x450, 0x330, 0x480 }) do
-        if is_dlsym(gmifa - delta) then found = gmifa - delta break end
+    local addr = read64(out)
+    if not addr or addr == 0 then
+        DLSYM_FIX_MSG = "sys_dynlib_dlsym returned no address"
+        return
     end
 
-    -- Nothing known matched: sweep backwards for the prologue instead of
-    -- falling through to a number that is probably wrong.
-    if not found then
-        for off = 0x300, 0x800, 4 do
-            if is_dlsym(gmifa - off) then found = gmifa - off break end
-        end
-    end
-
-    if found then
-        SCE_KERNEL_DLSYM = found
-        sceKernelDlsym = func_wrap(found)
-    end
-end
+    SCE_KERNEL_DLSYM = addr
+    sceKernelDlsym = func_wrap(addr)
+    DLSYM_FIX_MSG = string.format("dlsym resolved by syscall at 0x%X", addr)
 end)
 
 init_dlsym()

@@ -8,40 +8,70 @@
 
 -- Resolve sceKernelDlsym before Luac0re's own guess is used.
 --
--- init_dlsym() derives it as a fixed distance from
--- sceKernelGetModuleInfoFromAddr and, on PS5, never checks the answer. It uses
--- 0x450 for firmware 10.00 and up, which is correct, and 0x480 below that,
--- which is not correct for any firmware -- the real distance is 0x340 on 4.xx.
--- Calling the wrong address kills the Lua VM outright, so the loader prints
--- its banner and disappears.
+-- init_dlsym() derives it as a fixed distance back from
+-- sceKernelGetModuleInfoFromAddr and, on PS5, never checks the answer:
+-- 0x450 for firmware 10.00 and up, 0x480 below that. Measured across the 55
+-- retail firmwares that could be parsed, the real distance is:
+--
+--     0x330   02.00 - 03.21        0x480   05.00 - 09.60
+--     0x340   04.00 - 04.51        0x450   10.00 - 13.42
+--
+-- so the built-in constant is wrong for every 2.xx, 3.xx and 4.xx console --
+-- 14 firmwares. Calling that address kills the Lua VM outright, so the loader
+-- prints its banner and disappears.
 --
 -- The address cannot be checked by reading it: PS5 system-module text is
 -- execute-only, so reading libkernel faults even where calling it is fine.
--- That is why Luac0re's PS4 path verifies a prologue and its PS5 path does
--- not. Ask the kernel instead -- sys_dynlib_dlsym needs no offset, reads
--- nothing, and is correct on every firmware.
+-- That is why Luac0re verifies a prologue on PS4 and refuses to on PS5.
+--
+-- Ask the kernel instead. sys_dynlib_dlsym needs no offset and reads nothing.
+-- Its number is 0x24F on all 55 firmwares, and the numbering around it is
+-- frozen -- __sys_dynlib_load_prx (0x252) and __sys_randomized_path (0x25A)
+-- bracket it and never move across 52 firmwares, with no __sys_* stub
+-- renumbered anywhere.
 --
 -- Wrapped: on anything unexpected, fall through to the built-in path rather
 -- than taking the loader down, which is the failure being fixed.
 pcall(function()
     if type(sceKernelDlsym) == "function" then return end
 
-    local out = malloc(8)
-    write64(out, 0)
-    if syscall.dlsym(LIBKERNEL_HANDLE, "sceKernelDlsym", out) ~= 0 then
-        DLSYM_FIX_MSG = "sys_dynlib_dlsym refused; using the built-in guess"
-        return
+    local addr = nil
+
+    if type(syscall) == "table" and type(syscall.dlsym) == "function" then
+        local out = malloc(8)
+        write64(out, 0)
+        if syscall.dlsym(LIBKERNEL_HANDLE, "sceKernelDlsym", out) == 0 then
+            local a = read64(out)
+            if a and a ~= 0 then addr = a end
+        end
     end
 
-    local addr = read64(out)
-    if not addr or addr == 0 then
-        DLSYM_FIX_MSG = "sys_dynlib_dlsym returned no address"
-        return
+    -- Only if the syscall is unavailable. These are measured from retail
+    -- firmware, not guessed; 1.xx is left alone because its libkernel is
+    -- still SELF-encrypted here and was never measured.
+    if not addr then
+        local major = tonumber(tostring(FW_VERSION or ""):match("^(%d+)"))
+        local delta = nil
+        if major then
+            if major >= 10 then delta = 0x450
+            elseif major >= 5 then delta = 0x480
+            elseif major == 4 then delta = 0x340
+            elseif major >= 2 then delta = 0x330
+            end
+        end
+        if delta then
+            addr = read64(LIBC_OFFSETS.sceKernelGetModuleInfoFromAddr) - delta
+            DLSYM_FIX_MSG = string.format(
+                "sys_dynlib_dlsym unavailable; using measured delta 0x%X", delta)
+        end
     end
 
-    SCE_KERNEL_DLSYM = addr
-    sceKernelDlsym = func_wrap(addr)
-    DLSYM_FIX_MSG = string.format("dlsym resolved by syscall at 0x%X", addr)
+    if addr then
+        SCE_KERNEL_DLSYM = addr
+        sceKernelDlsym = func_wrap(addr)
+        DLSYM_FIX_MSG = DLSYM_FIX_MSG
+            or string.format("dlsym resolved by syscall at 0x%X", addr)
+    end
 end)
 
 init_dlsym()

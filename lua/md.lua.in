@@ -6,6 +6,57 @@
 --
 -- Generated from lua/gb.lua.in by tools/bin2lua.py -- do not edit lua/gb.lua.
 
+-- Resolve sceKernelDlsym before Luac0re's own guess is used.
+--
+-- init_dlsym() computes it as a fixed distance from
+-- sceKernelGetModuleInfoFromAddr and, on PS5, never checks the answer. The
+-- distance measured from firmware is 0x330 on 1.05, 0x340 on 4.00 and 4.51,
+-- and 0x450 on 10.00 and 13.20 -- but the built-in uses 0x480 for anything
+-- below 10.00, which is wrong for all of them. Calling that address kills the
+-- Lua VM outright, so the loader prints its banner and vanishes.
+--
+-- Verify instead of guessing: sceKernelDlsym starts with the same prologue on
+-- every firmware checked, so test each candidate before trusting it. Reading
+-- memory is harmless; calling the wrong address is not.
+-- Wrapped: if these primitives are not ready this early, fall through to
+-- the built-in path rather than taking the loader down -- which is the very
+-- failure being fixed.
+pcall(function()
+if type(sceKernelDlsym) ~= "function" then
+    local gmifa = read64(LIBC_OFFSETS.sceKernelGetModuleInfoFromAddr)
+
+    -- 55 48 89 E5 | E8 rel32 | 85 C0 | 74 1D | E8 rel32 | 8B 00
+    local function is_dlsym(addr)
+        local ok, b = pcall(function() return read_buffer(addr, 20) end)
+        if not ok or not b or #b < 20 then return false end
+        local function at(i) return string.byte(b, i) end
+        return at(1) == 0x55 and at(2) == 0x48 and at(3) == 0x89 and at(4) == 0xE5
+           and at(5) == 0xE8
+           and at(10) == 0x85 and at(11) == 0xC0
+           and at(12) == 0x74 and at(14) == 0xE8
+           and at(19) == 0x8B and at(20) == 0x00
+    end
+
+    local found = nil
+    for _, delta in ipairs({ 0x340, 0x450, 0x330, 0x480 }) do
+        if is_dlsym(gmifa - delta) then found = gmifa - delta break end
+    end
+
+    -- Nothing known matched: sweep backwards for the prologue instead of
+    -- falling through to a number that is probably wrong.
+    if not found then
+        for off = 0x300, 0x800, 4 do
+            if is_dlsym(gmifa - off) then found = gmifa - off break end
+        end
+    end
+
+    if found then
+        SCE_KERNEL_DLSYM = found
+        sceKernelDlsym = func_wrap(found)
+    end
+end
+end)
+
 init_dlsym()
 sceMsgDialogTerminate()
 

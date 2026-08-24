@@ -54,6 +54,24 @@ void draw_hline(u32 *scr, int y, int x1, int x2, u32 color) {
     }
 }
 
+/* The menu's own scaler. UI_W * UI_SCALE == SCR_W and UI_H * UI_SCALE == SCR_H
+   exactly, so this writes every pixel of the frame: no centring arithmetic, no
+   pillarbox, and no need to clear_fb() first. Source stride is UI_W, which is
+   why this cannot share blit_scale() -- that one strides on MD_FB_W. */
+void blit_ui(u32 *fb, const u32 *src) {
+    for (int uy = 0; uy < UI_H; uy++) {
+        const u32 *srow = &src[uy * UI_W];
+        for (int dy = 0; dy < UI_SCALE; dy++) {
+            u32 *row = &fb[(uy * UI_SCALE + dy) * SCR_W];
+            for (int ux = 0; ux < UI_W; ux++) {
+                u32 c = srow[ux];
+                u32 *out = &row[ux * UI_SCALE];
+                for (int dx = 0; dx < UI_SCALE; dx++) out[dx] = c;
+            }
+        }
+    }
+}
+
 /* The Mega Drive's picture size is not fixed, so the scale factor is a
    constant but the centring is not. Source stride is always MD_FB_W even when
    the live width is 256, because that is how mdglue.c lays the frame out. */

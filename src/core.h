@@ -49,10 +49,24 @@ typedef signed char    s8;
 #define MD_FB_H  240
 #define SCALE    4
 
-/* The menu is drawn at the same resolution and goes through the same scaler,
-   so the picker and the game reach the screen by one code path. */
-#define UI_W   MD_FB_W
-#define UI_H   MD_FB_H
+/* The MENU is 16:9 and fills the screen; the GAME above stays 4:3.
+ *
+ * The menu used to be drawn at MD_FB_W x MD_FB_H and pushed through the game
+ * scaler, so it inherited the Mega Drive's 4:3 pillarbox. That is right for
+ * emulated output and wrong for our own UI: the picker is not a Mega Drive
+ * frame and has no reason to wear its aspect on a 16:9 display.
+ *
+ * 480x270 at an integer 4x is exactly 1920x1080, so the menu fills the frame
+ * with no bars and no fractional scaling. The 8x8 glyph still lands 32 screen
+ * pixels tall -- the same text size as before, since SCALE was already 4 --
+ * and the usable text area widens from 40 columns to 60.
+ *
+ * The game keeps blit_scale() with MD_FB_W/MD_FB_H/SCALE above; only the menu
+ * uses these and blit_ui(). The two paths are separate so that changing the
+ * menu cannot move emulated output. */
+#define UI_W      480
+#define UI_H      270
+#define UI_SCALE  4                       /* 480*4 = 1920, 270*4 = 1080 */
 
 /* Audio. sceAudioOut is opened at 48kHz stereo; the Mega Drive produces two
  * streams at neither rate -- see mdglue.c. SAMPLES_PER_BUF is the

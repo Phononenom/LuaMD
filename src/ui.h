@@ -23,9 +23,15 @@ void draw_str(u32 *scr, int x, int y, const char *s, u32 color);
 void draw_centered(u32 *scr, int y, const char *s, u32 color);
 void draw_hline(u32 *scr, int y, int x1, int x2, u32 color);
 
-/* Nearest-neighbour integer scale of a 160x144 ARGB source into the centre of
-   the 1920x1080 framebuffer. */
+/* Nearest-neighbour integer scale of a live-sized Mega Drive frame (source
+   stride MD_FB_W) into the centre of the 1920x1080 framebuffer, pillarboxed.
+   This is the GAME path -- pointing the menu at it is what made the menu 4:3. */
 void blit_scale(u32 *fb, const u32 *src, int w, int h);
+
+/* The MENU path: UI_W x UI_H scaled by UI_SCALE, which covers 1920x1080
+   exactly, so there is no centring offset and no border left to clear. */
+void blit_ui(u32 *fb, const u32 *src);
+
 void clear_fb(u32 *fb);
 
 /* Accepts .gb, .gbc and .gbs (case-insensitive). */

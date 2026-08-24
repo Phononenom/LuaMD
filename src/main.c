@@ -20,7 +20,9 @@
 static const char RESP_204K[] = "HTTP/1.1 204\r\nConnection:keep-alive\r\nAccess-Control-Allow-Origin:*\r\n\r\n";
 static const char RESP_CORS[] = "HTTP/1.1 204\r\nAccess-Control-Allow-Origin:*\r\nAccess-Control-Allow-Methods:POST\r\nConnection:keep-alive\r\n\r\n";
 
-/* Menu is composed here, then goes through blit_scale like an emulated frame. */
+/* Menu is composed here at UI_W x UI_H (16:9) and goes out through blit_ui(),
+   deliberately a separate path from the game's blit_scale(). In .bss, which
+   linker.ld marks NOLOAD, so its size costs nothing in the blob. */
 static u32 ui_screen[UI_W * UI_H];
 
 /* ------------------------------------------------------- data bootstrap -- */
@@ -453,20 +455,26 @@ static int ftp_ui_idle(void *user, int roms_so_far) {
     /* A transfer finished and the client disconnected -- go and play it. */
     if (roms_so_far > 0) return 1;
 
-    ui_fill(u->screen, COL_BG);
-    draw_centered(u->screen, 30, "LUAMD", COL_BRAND);
-    draw_centered(u->screen, 46, "MEGA DRIVE", COL_HEAD);
-    draw_hline(u->screen, 62, 24, UI_W - 24, COL_LINE);
-    draw_centered(u->screen, 78, "NO ROMS IN SAVEDATA", COL_WARN);
-    draw_centered(u->screen, 100, "SEND THEM BY FTP TO", COL_NORM);
-    draw_centered(u->screen, 114, "THIS CONSOLE, PORT 1337", COL_NORM);
-    draw_centered(u->screen, 136, ".BIN .MD .GEN .SMD", COL_DIM);
-    draw_centered(u->screen, 158, "THEY ARE SAVED INTO THE GAME", COL_DIM);
-    draw_centered(u->screen, 172, "AND STAY THERE", COL_DIM);
-    draw_hline(u->screen, 194, 24, UI_W - 24, COL_LINE);
-    draw_centered(u->screen, 206, "WAITING -- R1 TO QUIT", COL_DIM);
+    /* This block's row positions were laid out against a 240-line buffer. The
+       menu buffer is taller now, so shift the whole thing down by half the
+       difference rather than re-tuning eleven constants -- the layout is
+       unchanged, it is just centred again. */
+    const int y0 = (UI_H - 240) / 2;
 
-    blit_scale((u32 *)u->fbs[u->active], u->screen, UI_W, UI_H);
+    ui_fill(u->screen, COL_BG);
+    draw_centered(u->screen, y0 + 30, "LUAMD", COL_BRAND);
+    draw_centered(u->screen, y0 + 46, "MEGA DRIVE", COL_HEAD);
+    draw_hline(u->screen, y0 + 62, 24, UI_W - 24, COL_LINE);
+    draw_centered(u->screen, y0 + 78, "NO ROMS IN SAVEDATA", COL_WARN);
+    draw_centered(u->screen, y0 + 100, "SEND THEM BY FTP TO", COL_NORM);
+    draw_centered(u->screen, y0 + 114, "THIS CONSOLE, PORT 1337", COL_NORM);
+    draw_centered(u->screen, y0 + 136, ".BIN .MD .GEN .SMD", COL_DIM);
+    draw_centered(u->screen, y0 + 158, "THEY ARE SAVED INTO THE GAME", COL_DIM);
+    draw_centered(u->screen, y0 + 172, "AND STAY THERE", COL_DIM);
+    draw_hline(u->screen, y0 + 194, 24, UI_W - 24, COL_LINE);
+    draw_centered(u->screen, y0 + 206, "WAITING -- R1 TO QUIT", COL_DIM);
+
+    blit_ui((u32 *)u->fbs[u->active], u->screen);
     NC(u->G, u->vid_flip, (u64)u->video, (u64)u->active, 1, u->frames, 0, 0);
     if (u->eq && u->wait_eq) {
         u8 evt[64]; s32 cnt = 0;
@@ -708,13 +716,14 @@ void _start(u64 eboot_base, u64 dlsym_addr, struct ext_args *ext) {
     }
 
     if ((s64)roms != -1) {
+        const int y0 = (UI_H - 240) / 2;   /* see the note in ftp_wait_screen */
         ui_fill(ui_screen, COL_BG);
-        draw_centered(ui_screen, 40, "LUAMD", COL_BRAND);
-        draw_centered(ui_screen, 56, "MEGA DRIVE", COL_HEAD);
-        draw_centered(ui_screen, 84, "FTP ON PORT 1337", COL_NORM);
-        draw_centered(ui_screen, 100, "WAITING FOR ROMS", COL_DIM);
-        blit_scale((u32 *)fbs[0], ui_screen, UI_W, UI_H);
-        blit_scale((u32 *)fbs[1], ui_screen, UI_W, UI_H);
+        draw_centered(ui_screen, y0 + 40, "LUAMD", COL_BRAND);
+        draw_centered(ui_screen, y0 + 56, "MEGA DRIVE", COL_HEAD);
+        draw_centered(ui_screen, y0 + 84, "FTP ON PORT 1337", COL_NORM);
+        draw_centered(ui_screen, y0 + 100, "WAITING FOR ROMS", COL_DIM);
+        blit_ui((u32 *)fbs[0], ui_screen);
+        blit_ui((u32 *)fbs[1], ui_screen);
         NC(G, vid_flip, (u64)video, 0, 1, 0, 0, 0);
 
         /* FTP writes straight into the savedata container, which is mounted
@@ -812,7 +821,11 @@ void _start(u64 eboot_base, u64 dlsym_addr, struct ext_args *ext) {
                Starting at 0 meant a held Cross re-selected the same ROM
                immediately, over and over, on returning to the picker. */
             u16 prev_btn = 0xFFFF;
-            int visible = 18;
+            /* Derived from the geometry instead of hard-coded, so it stays
+               correct if UI_H moves. Rows start at y=36 and step 10; the list
+               ends at the footer rule on UI_H-14, and one row is reserved for
+               the "more below" marker drawn at ly + visible*10. */
+            int visible = ((UI_H - 14) - 36) / 10 - 1;
             if (visible > rom_count) visible = rom_count;
 
             for (;;) {
@@ -913,7 +926,7 @@ void _start(u64 eboot_base, u64 dlsym_addr, struct ext_args *ext) {
                 draw_hline(ui_screen, UI_H - 14, 8, UI_W - 8, COL_LINE);
                 draw_centered(ui_screen, UI_H - 10, "L1 MENU  R1 EXIT", COL_DIM);
 
-                blit_scale((u32 *)fbs[active], ui_screen, UI_W, UI_H);
+                blit_ui((u32 *)fbs[active], ui_screen);
                 NC(G, vid_flip, (u64)video, (u64)active, 1, total_frames, 0, 0);
                 if (eq && wait_eq) {
                     u8 evt[64]; s32 cnt = 0;
@@ -935,9 +948,9 @@ void _start(u64 eboot_base, u64 dlsym_addr, struct ext_args *ext) {
         if (!md_load_rom(rom_path)) {
             for (int f = 0; f < 120; f++) {
                 ui_fill(ui_screen, COL_BG);
-                draw_centered(ui_screen, 60, "LOAD FAILED", COL_WARN);
-                draw_centered(ui_screen, 80, roms[selected].display, COL_DIM);
-                blit_scale((u32 *)fbs[active], ui_screen, UI_W, UI_H);
+                draw_centered(ui_screen, UI_H / 2 - 12, "LOAD FAILED", COL_WARN);
+                draw_centered(ui_screen, UI_H / 2 +  8, roms[selected].display, COL_DIM);
+                blit_ui((u32 *)fbs[active], ui_screen);
                 NC(G, vid_flip, (u64)video, (u64)active, 1, total_frames, 0, 0);
                 if (eq && wait_eq) { u8 e[64]; s32 c = 0; NC(G, wait_eq, eq, (u64)e, 1, (u64)&c, 0, 0); }
                 active ^= 1;

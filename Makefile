@@ -1,6 +1,8 @@
 # LuaMD -- Mega Drive / Genesis emulator as PS5 userland shellcode.
 #
 #   make            build md_emu.bin and fold it into lua/md.lua
+#   make dist       package dist/LuaMD/{payload.bin,manifest} for the
+#                   Homebrew Browser
 #   make check      fail the build if any initialised pointer data survives
 #   make size       report the image against the JIT mapping ceiling
 #   make clean
@@ -112,5 +114,17 @@ size: $(TARGET).elf
 
 clean:
 	rm -f $(OBJS) $(TARGET).elf $(TARGET).bin lua/md.lua 
+	rm -rf dist
 
-.PHONY: all clean check size
+# Homebrew Browser packaging: dist/LuaMD holds payload.bin (the blob
+# verbatim) plus the manifest the browser reads to plan its JIT mappings.
+# reserve is the SAME reservation bin2lua.py substitutes for @@JIT_SIZE@@,
+# rounded up to whole 256KB chunks -- the granularity the browser remaps at.
+# mkmanifest.py fails the build if the blob outgrows the reservation or the
+# reservation outgrows the browser's 768KB JIT region.
+dist: $(TARGET).bin $(TARGET).elf
+	$(PYTHON) tools/mkmanifest.py LuaMD $(TARGET).bin $(TARGET).elf dist/LuaMD/manifest
+	cp $(TARGET).bin dist/LuaMD/payload.bin
+	@cat dist/LuaMD/manifest
+
+.PHONY: all clean check size dist
